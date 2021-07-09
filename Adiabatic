@@ -1,0 +1,280 @@
+import numpy as np
+import scipy.integrate as integrate
+from scipy import linalg
+from scipy.integrate import odeint
+from scipy.constants import hbar
+import sympy as sp
+import matplotlib.pyplot as plt
+from numpy.random import default_rng 
+from tabulate import tabulate
+from matplotlib import animation
+from scipy.integrate import quad
+import math
+from random import seed
+from random import random
+seed(1)
+
+h= 1
+psi_0 = np.array([1, 0], dtype = complex)
+sigmaX = np.array([[0, 1],[ 1, 0]], dtype = complex)
+sigmaY = np.array([[0, -1j],[1j, 0]], dtype = complex)
+sigmaZ = np.array([[1, 0],[0, -1]], dtype = complex)
+
+
+class Adiabatic():
+    dTheta = np.pi / 10
+    dPhi = 2 * np.pi / 10
+    
+    
+    def __init__(self, omega):
+        self.state = psi_0
+        self.gamma = 0
+  
+
+    def reset(self):
+        self.state = psi_0
+        self.gamma =  0
+
+    def compact(self):
+        p = np.power(np.absolute(self.state), 2)
+        theta = np.arccos((p[0] - p[1]) / (p[0] + p[1]))
+        phi = np.angle(self.state[1]) - np.angle(self.state[0])
+        if phi < 0:
+            phi += 2 * np.pi
+        thetaIndex = round(theta / Adiabatic.dTheta)
+        phiIndex = round(phi / Adiabatic.dPhi)
+        return thetaIndex, phiIndex
+        
+        
+    def inspect(self):
+        p = np.power(np.absolute(self.state), 2)
+        theta = np.arccos((p[0] - p[1]) / (p[0] + p[1]))
+        phi = np.angle(self.state[1]) - np.angle(self.state[0])
+        if phi < 0:
+            phi += 2 * np.pi
+        return theta/np.pi, phi/np.pi  
+    
+    def valueInfinity(self, gamma, cutoff, omega, beta):
+        if gamma == 0 or gamma == np.pi:
+            delta = cutoff * np.sign(np.cos(gamma))
+        else:
+            delta = omega * np.cos(1/beta)/np.tan(gamma)
+            if abs(delta) > cutoff :
+                delta = cutoff * np.sign(delta)    
+        return delta
+        
+        
+    def rk2(self, beta, omega):
+        dt = np.pi / 2000
+        gamma_1 = self.gamma + omega * np.sin(1/beta) * dt/2
+        delta_1 = self.valueInfinity(gamma_1, 5, omega, beta)
+        delta = self.valueInfinity(self.gamma, 5, omega, beta)   
+        hamiltonian = 0.5 * delta  * sigmaZ + 0.5 * omega * sigmaX    
+        self.gamma = self.gamma + omega *np.sin(1/beta) * dt    
+        K1= self.state - 1j * dt * 0.5 * hamiltonian.dot(self.state)
+        hamiltonian_1 = 0.5 * delta_1  * sigmaZ + 0.5 * omega  * sigmaX
+        self.state = self.state - 1j * dt  * hamiltonian_1.dot(K1)
+        print(np.linalg.norm(self.state))
+        
+    def timeEvolve(self,beta,omega):
+        for i in range(10):
+           self.rk2(beta,omega)
+            
+       
+    def fidelity(self):
+        f = abs(self.state[1]) ** 2
+        return f
+                  
+class Environment(): 
+    threshold = 0.97
+    maxSteps = 200
+    nActions = 10
+    betavalues= np.linspace(0.00001, np.pi /2, num = nActions)
+    omega = 1
+    omega2 = np.exp((- random() / 2) ** 2)
+
+    def __init__(self):
+        self.adiabatic = Adiabatic(Environment.omega )
+        self.adiabaticNoise = Adiabatic(Environment.omega2)
+        self.nSteps = 0
+     
+
+    def reset(self):
+        self.adiabatic.reset()
+        self.adiabaticNoise.reset()
+        self.nSteps = 0
+        
+    def fidelityReference(self):
+          theta1= self.adiabatic.inspect()[0]
+          phi1= self.adiabatic.inspect()[1]
+          theta2= self.adiabaticNoise.inspect()[0]
+          phi2= self.adiabaticNoise.inspect()[1]
+          f = np.cos(theta1) * np.cos(theta2) * np.cos(phi1 - phi2) + np.sin(theta1) * np.sin(theta2) 
+          return abs(f) ** 2
+
+    def reward(self):
+        f1 = self.adiabatic.fidelity()  	
+        f = self.fidelityReference()
+        #if f == 1:
+            #reward = 1000
+        #else:
+        reward = f1 * f 
+        return reward
+
+    def applyAction(self, action):
+        beta = Environment.betavalues[action]
+        self.adiabatic.timeEvolve(beta,Environment.omega)
+        self.adiabaticNoise.timeEvolve(beta,Environment.omega2)
+        self.nSteps += 1
+
+    def inprogress(self):
+        if self.adiabatic.fidelity() > Environment.threshold:
+            return False
+        if self.nSteps >= Environment.maxSteps:
+            return False
+        return True
+
+    def state(self):
+        return self.adiabatic.compact()
+
+class Agent():
+    gamma = 0.999
+    alpha = 0.001
+    epsilon = 0.1
+
+    def __init__(self, size):
+        self.values = dict()
+        self.nActions = size
+
+    def updateQ(self, state, action, next_max):
+        self.values[state][action] *= 1-self.alpha
+        self.values[state][action] += self.alpha * self.gamma * next_max
+        
+    def allowedActions(self, value):
+        action = rng.choice(value)
+        self.value    
+
+    def optimumPolicy(self, value):
+        m=[]
+        maxQ = max(value)
+        for i in range(len(value)):
+          if value[i] == maxQ:
+            m.append(i)
+        action = rng.choice(m)
+        return action
+
+    def randomPolicy(self, value):
+        return rng.integers(len(value))
+
+    def proposeAction(self, state):
+        if state not in self.values.keys():
+            self.values[state] = [0.5]*self.nActions
+        if rng.random() > Agent.epsilon:
+            return self.optimumPolicy(self.values[state])
+        else:
+            return self.randomPolicy(self.values[state])
+		
+    def learning(self, history, reward):
+        cache = history[-1]
+        self.values[cache[0]][cache[1]] = reward
+        for i in range(1, len(history)):
+            next_max = max(self.values[cache[0]])
+            cache = history[-i-1]
+            self.updateQ(cache[0], cache[1], next_max) 
+            
+
+            
+epoch = 25000
+n=100
+rng = default_rng()
+environment = Environment()
+adiabatic= Adiabatic( Environment.omega)
+adiabaticNoise= Adiabatic( Environment.omega2)
+agent = Agent(Environment.nActions)
+result = []
+allSolutions = []
+for i in range(epoch):
+  history = []
+  environment.reset()
+  solution = []
+  while environment.inprogress():
+    state = environment.state()
+    action = agent.proposeAction(state)
+    betaValue = environment.betavalues[action]
+    solution.insert(i, betaValue)
+    history.append([state, action])
+    #if not i% n:
+       #print(agent.proposeAction(state), environment.reward())
+    environment.applyAction(action)
+    allSolutions.append( solution)
+  result.append(environment.reward())              
+  agent.learning(history, environment.reward())
+  Agent.epsilon = max(Agent.epsilon - 0.0001, 0.001)
+  maxResult = max(result)
+  index = result.index(maxResult)
+  bestSolution = allSolutions[index]
+  lastSolution = allSolutions[-1]
+plt.figure(1)
+plt.plot(np.mean(np.reshape(np.array(result), (1, -1)), axis=0))
+plt.savefig("average_reward.png")  
+#print(bestSolution ) 
+
+x=[]
+y=[]
+theta1=[]
+phi1=[]
+theta2=[]
+phi2=[]
+
+lastX=[]
+lastY=[]
+lastTheta1=[]
+lastPhi1=[]
+lastTheta2=[]
+lastPhi2=[]
+
+for i in range(0, len(bestSolution)):
+    state = adiabatic.timeEvolve(bestSolution[i], environment.omega)
+    #print("step: "+ str(i)+ " Uvalue:" + str(bestSolution[i] )+ " theta:" + str(adiabatic.compact()[0]) + " phi:" + str(adiabatic.compact()[1])) 
+    #print(adiabatic.compact())
+    x.append(i)
+    y.append(bestSolution[i] )
+    fig=plt.figure(2)
+    theta1.append(adiabatic.inspect()[0])
+    phi1.append(adiabatic.inspect()[1])
+    plt.scatter(theta1,phi1, color='magenta')
+    plt.plot(theta1,phi1, color='magenta')
+    state = adiabaticNoise.timeEvolve(bestSolution[i], environment.omega2)
+    theta2.append(adiabaticNoise.inspect()[0])
+    phi2.append(adiabaticNoise.inspect()[1])
+    plt.scatter(theta2,phi2, color='yellow')
+    plt.plot(theta2,phi2, color='yellow')
+    plt.annotate(i, (theta1[i], phi1[i]))
+    #plt.annotate(i, (theta2[i], phi2[i]))
+    plt.figure(3)
+    plt.scatter(x,y, color='blue')
+    plt.plot(x,y, color='blue')
+    
+    
+for i in range(0, len(lastSolution)):
+    state = adiabatic.timeEvolve(lastSolution[i],  environment.omega)
+    lastX.append(i)
+    lastY.append(lastSolution[i] )
+    fig=plt.figure(4)
+    lastTheta1.append(adiabatic.inspect()[0])
+    lastPhi1.append(adiabatic.inspect()[1])
+    plt.scatter(lastTheta1,lastPhi1, color='orange')
+    plt.plot(lastTheta1,lastPhi1, color='orange')
+    state = adiabaticNoise.timeEvolve(lastSolution[i], environment.omega2)
+    lastTheta2.append(adiabaticNoise.inspect()[0])
+    lastPhi2.append(adiabaticNoise.inspect()[1])
+    plt.scatter(lastTheta2,lastPhi2, color='purple')
+    plt.plot(lastTheta2,lastPhi2, color='purple')
+    plt.annotate(i, (lastTheta1[i], lastPhi1[i]))
+   # plt.annotate(i, (lastTheta2[i], lastPhi2[i]))
+    plt.figure(5)
+    plt.scatter(lastX,lastY, color='green')
+    plt.plot(lastX,lastY, color='green')
+
+
+plt.show()
