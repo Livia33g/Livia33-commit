@@ -279,3 +279,306 @@ for i in range(0, len(lastSolution)):
 
 plot_bloch_vector([0,1,0], title="New Bloch Sphere")
 plt.show()
+
+
+###################################################################################################################
+import numpy as np
+import scipy.integrate as integrate
+import csv
+from scipy import linalg
+from scipy.integrate import odeint
+from scipy.constants import hbar
+import sympy as sp
+import matplotlib.pyplot as plt
+from numpy.random import default_rng 
+from tabulate import tabulate
+from matplotlib import animation
+from scipy.integrate import quad
+import math
+import random
+#from random import random
+#from random import seed
+rng = default_rng(1)
+
+h= 1
+psi_0 = np.array([1, 0], dtype = complex)
+sigmaX = np.array([[0, 1],[ 1, 0]], dtype = complex)
+sigmaY = np.array([[0, -1j],[1j, 0]], dtype = complex)
+sigmaZ = np.array([[1, 0],[0, -1]], dtype = complex)
+
+
+class Adiabatic():
+    dTheta = np.pi / 10
+    dPhi = 2 * np.pi / 10
+    totalTime = np.pi
+    
+    def __init__(self, epsilon, maxSteps):
+        self.state = psi_0
+        self.gamma = 0
+        self.epsilon = epsilon
+        self.maxSteps = maxSteps
+
+    def reset(self):
+        self.state = psi_0
+        self.gamma =  0
+
+    def compact(self):
+        p = np.power(np.absolute(self.state), 2)
+        theta = np.arccos((p[0] - p[1]) / (p[0] + p[1]))
+        phi = np.angle(self.state[1]) - np.angle(self.state[0])
+        if phi < 0:
+            phi += 2 * np.pi
+        thetaIndex = round(theta / Adiabatic.dTheta)
+        phiIndex = round(phi / Adiabatic.dPhi)
+        return thetaIndex, phiIndex
+        
+        
+    def inspect(self):
+        p = np.power(np.absolute(self.state), 2)
+        theta = np.arccos((p[0] - p[1]) / (p[0] + p[1]))
+        phi = np.angle(self.state[1]) - np.angle(self.state[0])
+        if phi < 0:
+            phi += 2 * np.pi
+        return theta, phi  
+    
+    def valueInfinity(self, beta, gamma , cutoff= 5):
+        omega=1
+        if gamma == 0 or gamma == np.pi:
+            delta = cutoff * np.sign(np.cos(gamma))
+        else:
+            delta = omega * np.cos(beta)/np.tan(gamma)
+            if abs(delta) > cutoff :
+                delta = cutoff * np.sign(delta)    
+        return delta
+        
+  
+          
+           
+    def rk2(self, beta):
+        omega= 1
+        dt = Adiabatic.totalTime / 200
+        gamma_1 = self.gamma + omega * np.sin(beta) * dt/2
+        delta_1 = self.valueInfinity(beta, gamma_1, 5)
+        delta = self.valueInfinity(beta, gamma_1, 5)   
+        hamiltonian = 0.5 *( delta + self.epsilon)  * sigmaZ + 0.5 * omega * sigmaX    
+        self.gamma = self.gamma + omega *np.sin(beta) * dt    
+        K1= self.state - 1j * dt * 0.5 * hamiltonian.dot(self.state)
+        hamiltonian_1 = 0.5 *( delta_1 + self.epsilon  )* sigmaZ + 0.5 * omega  * sigmaX
+        self.state = self.state - 1j * dt  * hamiltonian_1.dot(K1)        
+        
+    def timeEvolve(self,beta):
+      steptime = Adiabatic.totalTime / self.maxSteps 
+      t = 0
+      while t < steptime: 
+        self.rk2(beta)
+        t = t + Adiabatic.totalTime / 200
+         
+    def detuning(self, beta):
+       self.timeEvolve(beta)
+       gamma = self.gamma
+       self.valueInfinity(beta, gamma)     
+       print( self.valueInfinity(beta,gamma) )        
+       return self.valueInfinity(beta, gamma) 
+       
+       
+       
+    def fidelity(self):
+        f = abs(self.state[1]) ** 2
+        return f
+                  
+class Environment(): 
+    threshold = 0.98
+    nActions = 10
+    Betavalues= np.linspace(np.pi/ 2 * nActions, np.pi/2 , num = nActions)
+    epsilonP = 0.1
+    epsilonM = -0.1
+ 
+
+    def __init__(self, maxSteps):
+        self.maxSteps = maxSteps
+        self.adiabatic = Adiabatic(Environment.epsilonP, self.maxSteps )
+        self.adiabaticNoise = Adiabatic(Environment.epsilonM, self.maxSteps )
+        self.nSteps = 0
+        
+
+    def reset(self):
+        self.adiabatic.reset()
+        self.adiabaticNoise.reset()
+        self.nSteps = 0
+        
+    def fidelityReference(self):
+          theta1= self.adiabatic.inspect()[0]
+          phi1= self.adiabatic.inspect()[1]
+          theta2= self.adiabaticNoise.inspect()[0]
+          phi2= self.adiabaticNoise.inspect()[1]
+          f = np.cos(theta1) * np.cos(theta2) * np.cos(phi1 - phi2) + np.sin(theta1) * np.sin(theta2) 
+          return abs(f) ** 2
+
+    def actualFidelity(self):
+        f1 = self.adiabatic.fidelity()  
+        f2 = self.adiabaticNoise.fidelity()  
+        fidelity = f1 * f2
+        return fidelity
+
+    def reward(self):
+        reward = self.actualFidelity()
+        if reward > 0.96:
+           reward = 1000
+        else:
+           reward = reward
+        return reward
+        
+    def timeEvolve(self,beta):  
+        self.adiabatic.timeEvolve(beta)
+        self.adiabaticNoise.timeEvolve(beta) 
+        return self.adiabatic.timeEvolve(beta),  self.adiabaticNoise.timeEvolve(beta)
+       
+    def detuning(self, beta): 
+         self.timeEvolve(beta)
+         self.adiabatic.detuning(beta)
+         return self.adiabatic.detuning(beta)
+         
+              
+         
+    def applyAction(self, action):
+        Beta = Environment.Betavalues[action]
+        self.adiabatic.timeEvolve(Beta )
+        self.adiabaticNoise.timeEvolve(Beta )
+        self.nSteps += 1
+
+    def inprogress(self):
+        if  self.actualFidelity() == Environment.threshold:
+            return False
+        if self.nSteps >= self.maxSteps:
+            return False
+        return True
+
+    def state(self):
+        return self.adiabatic.inspect(),  self.adiabaticNoise.inspect()
+        
+    def compactState(self):
+        return self.adiabatic.compact(),  self.adiabaticNoise.compact()    
+        
+class Agent():
+    gamma = 0.99
+    alpha = 0.0005
+    epsilon = 0.5
+
+    def __init__(self, size):
+        self.values = dict()
+        self.nActions = size
+
+    def updateQ(self, state, action, next_max):
+        self.values[state][action] *= 1-self.alpha
+        self.values[state][action] += self.alpha * self.gamma * next_max
+        
+    def allowedActions(self, value):
+        action = rng.choice(value)
+        self.value    
+
+    def optimumPolicy(self, value):
+        m=[]
+        maxQ = max(value)
+        for i in range(len(value)):
+          if value[i] == maxQ:
+            m.append(i)
+        action = rng.choice(m)
+        return action
+
+    def randomPolicy(self, value):
+        return rng.integers(len(value))
+
+    def proposeAction(self, state):
+        if state not in self.values.keys():
+            self.values[state] = [0.1]*self.nActions
+        if rng.random() > Agent.epsilon:
+            return self.optimumPolicy(self.values[state])
+        else:
+            return self.randomPolicy(self.values[state])
+		
+    def learning(self, history, reward):
+        cache = history[-1]
+        self.values[cache[0]][cache[1]] = reward
+        for i in range(1, len(history)):
+            next_max = max(self.values[cache[0]])
+            cache = history[-i-1]
+            self.updateQ(cache[0], cache[1], next_max) 
+            
+
+agent = Agent(Environment.nActions)
+result = []
+allSolutions = []
+n=100
+
+for i in range(50):            
+   maxSteps = i+1
+   epoch = maxSteps * 100
+   environment = Environment(maxSteps)            
+   epoch = maxSteps * 100
+   environment = Environment(maxSteps)
+   for i in range(epoch):
+      history = []
+      environment.reset()
+      solution = []
+      while environment.inprogress():
+         state = environment.compactState()
+         action = agent.proposeAction(state)
+         Beta = environment.Betavalues[action]
+         solution.insert(i, Beta)
+         history.append([state, action])
+         environment.applyAction(action)
+      result.append(environment.actualFidelity())              
+      agent.learning(history, environment.reward())
+      if not i% n:
+          print("Step number:" + str(maxSteps))
+          print(environment.reward())
+      Agent.epsilon = max(Agent.epsilon - 0.0001, 0.001)
+      allSolutions.append(solution)
+     
+         
+maxResult = max(result)
+index = result.index(maxResult)
+bestSolution = allSolutions[index]
+lastSolution = allSolutions[-1]
+#plt.figure(1)
+#plt.plot(np.mean(np.reshape(np.array(result), (1, -1)), axis=0))
+#plt.savefig("average_reward.png")  
+results = open("results.txt", "w")
+for i in range(len(result)):
+   results.write(str(i) + " " + str(result[i]) + "\n")
+results.close()
+
+
+#environment.reset()
+#last = open("lastState.txt", "w")
+#state = environment.state()
+#last.write(str(np.cos(state[0][1])* np.sin(state[0][0]))+ " " +str(np.sin(state[0][1]) * np.sin(state[0][0]))+ " " +str(np.cos(state[0][0])) + " " + str(np.cos(state[1][1])* np.sin(state[1][0])) + " " + str(np.sin(state[1][1]) * np.sin(state[1][0]))+ " " +str(np.cos(state[1][0])) + "\n")
+#for i in range(len(lastSolution)):
+   #environment.timeEvolve(lastSolution[i]) 
+   #state = environment.state()
+   #last.write(str(np.cos(state[0][1])* np.sin(state[0][0]))+ " " +str(np.sin(state[0][1]) * np.sin(state[0][0]))+ " " +str(np.cos(state[0][0])) + " " + str(np.cos(state[1][1])* np.sin(state[1][0])) + " " + str(np.sin(state[1][1]) * np.sin(state[1][0]))+ " " +str(np.cos(state[1][0])) + "\n")
+#last.close()
+
+
+
+environment.reset()
+f = open("state.txt", "w")
+state = environment.state()
+f.write(str(np.cos(state[0][1])* np.sin(state[0][0]))+ " " +str(np.sin(state[0][1]) * np.sin(state[0][0]))+ " " +str(np.cos(state[0][0])) + " " + str(np.cos(state[1][1])* np.sin(state[1][0])) + " " + str(np.sin(state[1][1]) * np.sin(state[1][0]))+ " " +str(np.cos(state[1][0])) + "\n")
+for i in range(len(bestSolution)):
+   environment.timeEvolve(bestSolution[i]) 
+   state = environment.state()
+   f.write(str(np.cos(state[0][1])* np.sin(state[0][0]))+ " " +str(np.sin(state[0][1]) * np.sin(state[0][0]))+ " " +str(np.cos(state[0][0])) + " " + str(np.cos(state[1][1])* np.sin(state[1][0])) + " " + str(np.sin(state[1][1]) * np.sin(state[1][0]))+ " " +str(np.cos(state[1][0])) + "\n")
+f.close()
+
+beta = open("beta.txt", "w")
+for i in range(len(bestSolution)):
+    beta.write(str(i) + " " + str(bestSolution[i]) + "\n")
+beta.close()
+
+detuning = open("detuning.txt",  "w")
+for i in range(len(bestSolution)):
+    delta = environment.detuning(bestSolution[i])
+    if delta is not None:
+        detuning.write(str(i) + " " + str(delta) + "\n")
+detuning.close()
